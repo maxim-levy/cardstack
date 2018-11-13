@@ -14,6 +14,7 @@ const { upsert, queryToSQL, param } = require('./util');
 const config = postgresConfig({ database: `pgsearch_${process.env.PGSEARCH_NAMESPACE}` });
 
 module.exports = declareInjections({
+  // schema: 'hub:current-schema',
   controllingBranch: 'hub:controlling-branch',
 },
 
@@ -117,8 +118,8 @@ class PgClient extends EventEmitter {
     }
   }
 
-  beginBatch() {
-    return new Batch(this);
+  beginBatch(schema, read) {
+    return new Batch(this, schema, read);
   }
 
   async deleteOlderGenerations(branch, sourceId, nonce) {
@@ -168,19 +169,19 @@ class PgClient extends EventEmitter {
 });
 
 class Batch {
-  constructor(client) {
+  constructor(client, schema, read) {
     this.client = client;
+    this._read = read;
+    this._schema = schema;
     this._touched = Object.create(null);
     this._touchCounter = 0;
-    this._schema = null;
-    this._read = null;
-    this._branch = null;
     this._grantsTouched = false;
     this._groupsTouched = false;
+    this._cache = [];
   }
 
   async saveDocument(context, opts = {}) {
-    let { schema, branch, type, id, sourceId, generation, upstreamDoc, _read:read } = context;
+    let { branch, type, id, sourceId, generation, upstreamDoc } = context;
     if (id == null) {
       log.warn(`pgsearch cannot save document without id ${JSON.stringify(upstreamDoc)}`);
       return;
@@ -191,11 +192,7 @@ class Batch {
     let refs = await context.references();
     let realms = await context.realms();
 
-    this._schema = schema;
-    this._read = read;
-    this._branch = branch;
-
-    this._touched[`${type}/${id}`] = this._touchCounter++;
+    this._touched[`${branch}/${type}/${id}`] = this._touchCounter++;
 
     if (!searchDoc) { return; }
 
@@ -221,13 +218,9 @@ class Batch {
   }
 
   async deleteDocument(context) {
-    let { branch, type, id, schema, _read:read } = context;
+    let { branch, type, id } = context;
 
-    this._schema = schema;
-    this._read = read;
-    this._branch = branch;
-
-    this._touched[`${type}/${id}`] = this._touchCounter++;
+    this._touched[`${branch}/${type}/${id}`] = this._touchCounter++;
     let sql = 'delete from documents where branch=$1 and type=$2 and id=$3';
 
     await this.client.query(sql, [branch, type, id]);
@@ -238,7 +231,7 @@ class Batch {
   }
 
   async done() {
-    await this._invalidations(this._schema, this._branch, this._read);
+    await this._invalidations();
 
     if (this._grantsTouched) {
       await this._recalcuateRealms();
@@ -267,14 +260,17 @@ class Batch {
       'select id, type, upstream_doc from documents where branch=$1',
       [branch],
       async ({ id, upstream_doc:upstreamDoc, type }) => {
-        let realms = this._schema.authorizedReadRealms(type, upstreamDoc.data);
+        log.info('this._schema: %j', this._schema);
+        let schema = await this._schema.forControllingBranch();
+        let realms = schema.authorizedReadRealms(type, upstreamDoc.data);
         const sql = 'update documents set realms=$1 where id=$2 and type=$3 and branch=$4';
         await this.client.query(sql, [realms, id, type, branch]);
       });
-  }
+    }
 
   async _recalculateUserRealms() {
     let branch = this.client.controllingBranch.name;
+    let schema = await this._schema.forControllingBranch();
     await this.client._iterateThroughRows(
       `select id, type, source, upstream_doc, generation from documents where branch=$1 and type != 'user-realms'`,
       [branch],
@@ -286,7 +282,7 @@ class Batch {
             sourceId,
             generation,
             upstreamDoc,
-            schema: this._schema,
+            schema,
             read: this._read
           });
           await this._maybeUpdateRealms(context);
@@ -296,54 +292,62 @@ class Batch {
   // This method does not need to recursively invalidate, because each
   // document stores a complete, rolled-up picture of which other
   // documents it references.
-  async _invalidations(schema, branch, read) {
-    await this.client._iterateThroughRows(
-      'select id, type from documents where expires < now()', [], async({ id, type }) => {
-        this._touched[`${type}/${id}`] = this._touchCounter++;
-      });
-    await this.client.query('delete from documents where expires < now()');
-    await this.client.docsThatReference(branch, Object.keys(this._touched), async (doc, refs) => {
-      let { type, id } = doc.data;
+  async _invalidations() {
+    let branches = Object.keys(this._touched).map(key => {
+      log.info('_touched: %s', key);
+      return key.split('/')[0];
+    }).filter((v, i, a) => a.indexOf(v) === i);
 
-      if (this._isInvalidated(type, id, refs)) {
-        let sourceId = schema.types.get(type).dataSource.id;
-        // this is correct because IF this document's data source is currently
-        // doing a replace-all operation, it was either already touched (so
-        // this code isn't running) or it's old (so it's correct to have a
-        // non-current nonce).
-        let nonce = 0;
-        let context = new DocumentContext({
-          schema,
-          branch,
-          type,
-          id,
-          sourceId,
-          generation: nonce,
-          upstreamDoc: doc,
-          read
+    for (let branch of branches) {
+      await this.client._iterateThroughRows(
+        'select id, type from documents where expires < now()', [], async({ id, type }) => {
+          this._touched[`${branch}/${type}/${id}`] = this._touchCounter++;
         });
+      await this.client.query('delete from documents where expires < now()');
+      await this.client.docsThatReference(branch, Object.keys(this._touched), async (doc, refs) => {
+        let { type, id } = doc.data;
 
-        if (type === 'user-realms') {
-          // if we have an invalidated user-realms and it hasn't
-          // already been touched, that's because the corresponding
-          // user was delete, so we should also delete the
-          // user-realms.
-          await this.deleteDocument({ branch, type, id });
-        } else {
-          let searchDoc = await context.searchDoc();
-          if (!searchDoc) {
-            // bad documents get ignored. The DocumentContext logs these for
-            // us, so all we need to do here is nothing.
-            return;
+        if (this._isInvalidated(branch, type, id, refs)) {
+          let schema = await this._schema.forBranch(branch);
+          let sourceId = schema.types.get(type).dataSource.id;
+          // this is correct because IF this document's data source is currently
+          // doing a replace-all operation, it was either already touched (so
+          // this code isn't running) or it's old (so it's correct to have a
+          // non-current nonce).
+          let nonce = 0;
+          let context = new DocumentContext({
+            schema,
+            branch,
+            type,
+            id,
+            sourceId,
+            generation: nonce,
+            upstreamDoc: doc,
+            read: this._read
+          });
+
+          if (type === 'user-realms') {
+            // if we have an invalidated user-realms and it hasn't
+            // already been touched, that's because the corresponding
+            // user was delete, so we should also delete the
+            // user-realms.
+            await this.deleteDocument({ branch, type, id });
+          } else {
+            let searchDoc = await context.searchDoc();
+            if (!searchDoc) {
+              // bad documents get ignored. The DocumentContext logs these for
+              // us, so all we need to do here is nothing.
+              return;
+            }
+            await this.saveDocument(context);
           }
-          await this.saveDocument(context);
         }
-      }
-    });
+      });
+    }
   }
 
-  _isInvalidated(type, id, refs) {
-    let key = `${type}/${id}`;
+  _isInvalidated(branch, type, id, refs) {
+    let key = `${branch}/${type}/${id}`;
     let docTouchedAt = this._touched[key];
     if (docTouchedAt == null) {
       // our document hasn't been updated at all, so it definitely needs to be redone
@@ -361,7 +365,7 @@ class Batch {
   }
 
   async _maybeUpdateRealms(context) {
-    let { id, type, branch, sourceId, generation, schema, read, upstreamDoc:doc } = context;
+    let { id, type, branch, sourceId, generation, schema, upstreamDoc:doc } = context;
     if (!doc) { return; }
 
     let realms = await schema.userRealms(doc.data);
@@ -374,7 +378,7 @@ class Batch {
         sourceId,
         generation,
         schema,
-        read,
+        read: this._read,
         upstreamDoc: {
           data: {
             type: 'user-realms',

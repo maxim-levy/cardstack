@@ -7,6 +7,7 @@ const {
 const resolve = require('resolve');
 const path = require('path');
 const specifierPattern = /([^:]+):(.*)/;
+const log = require('@cardstack/logger')('cardstack/di');
 
 // Tolerate multiple distinct copies of this module
 if (!global.__cardstack_injection_symbol__) {
@@ -56,6 +57,7 @@ exports.Container = class Container extends GlimmerContainer {
     this._teardownPromises = [];
   }
   lookup(...args) {
+    log.info('args: %s', ...args);
     let result = super.lookup(...args);
     if (result) {
       setOwner(result, this);
