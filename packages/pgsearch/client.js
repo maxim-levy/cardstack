@@ -283,7 +283,7 @@ class Batch {
             generation,
             upstreamDoc,
             schema,
-            read: this._read
+            read: this._read(branch)
           });
           await this._maybeUpdateRealms(context);
       });
@@ -323,7 +323,7 @@ class Batch {
             sourceId,
             generation: nonce,
             upstreamDoc: doc,
-            read: this._read
+            read: this._read(branch)
           });
 
           if (type === 'user-realms') {
@@ -378,7 +378,7 @@ class Batch {
         sourceId,
         generation,
         schema,
-        read: this._read,
+        read: this._read(branch),
         upstreamDoc: {
           data: {
             type: 'user-realms',
