@@ -137,15 +137,22 @@ class PgClient extends EventEmitter {
     this.emit(operation, { type, id, doc });
   }
 
-  async docsThatReference(branch, references, fn){
-    const queryBatchSize = 100;
-    for (let i = 0; i < references.length; i += queryBatchSize){
-      let queryRefs = references.slice(i, i + queryBatchSize);
-      await this._iterateThroughRows(
-        'select upstream_doc, refs from documents where branch=$1 and refs && $2',
-        [branch, queryRefs],
-        async (row) => await fn(row.upstream_doc, row.refs)
-      );
+  async docsThatReference(references, fn){
+    let branches = references.map(key => {
+      log.info('_touched: %s', key);
+      return key.split('/')[0];
+    }).filter((v, i, a) => a.indexOf(v) === i);
+
+    for (let branch of branches) {
+      const queryBatchSize = 100;
+      for (let i = 0; i < references.length; i += queryBatchSize){
+        let queryRefs = references.slice(i, i + queryBatchSize);
+        await this._iterateThroughRows(
+          'select upstream_doc, refs from documents where branch=$1 and refs && $2',
+          [branch, queryRefs],
+          async (row) => await fn(branch, row.upstream_doc, row.refs)
+        );
+      }
     }
   }
 
@@ -293,57 +300,50 @@ class Batch {
   // document stores a complete, rolled-up picture of which other
   // documents it references.
   async _invalidations() {
-    let branches = Object.keys(this._touched).map(key => {
-      log.info('_touched: %s', key);
-      return key.split('/')[0];
-    }).filter((v, i, a) => a.indexOf(v) === i);
-
-    for (let branch of branches) {
-      await this.client._iterateThroughRows(
-        'select id, type from documents where expires < now()', [], async({ id, type }) => {
-          this._touched[`${branch}/${type}/${id}`] = this._touchCounter++;
-        });
-      await this.client.query('delete from documents where expires < now()');
-      await this.client.docsThatReference(branch, Object.keys(this._touched), async (doc, refs) => {
-        let { type, id } = doc.data;
-
-        if (this._isInvalidated(branch, type, id, refs)) {
-          let schema = await this._schema.forBranch(branch);
-          let sourceId = schema.types.get(type).dataSource.id;
-          // this is correct because IF this document's data source is currently
-          // doing a replace-all operation, it was either already touched (so
-          // this code isn't running) or it's old (so it's correct to have a
-          // non-current nonce).
-          let nonce = 0;
-          let context = new DocumentContext({
-            schema,
-            branch,
-            type,
-            id,
-            sourceId,
-            generation: nonce,
-            upstreamDoc: doc,
-            read: this._read(branch)
-          });
-
-          if (type === 'user-realms') {
-            // if we have an invalidated user-realms and it hasn't
-            // already been touched, that's because the corresponding
-            // user was delete, so we should also delete the
-            // user-realms.
-            await this.deleteDocument({ branch, type, id });
-          } else {
-            let searchDoc = await context.searchDoc();
-            if (!searchDoc) {
-              // bad documents get ignored. The DocumentContext logs these for
-              // us, so all we need to do here is nothing.
-              return;
-            }
-            await this.saveDocument(context);
-          }
-        }
+    await this.client._iterateThroughRows(
+      'select id, type, branch from documents where expires < now()', [], async({ id, type, branch }) => {
+        this._touched[`${branch}/${type}/${id}`] = this._touchCounter++;
       });
-    }
+    await this.client.query('delete from documents where expires < now()');
+    await this.client.docsThatReference(Object.keys(this._touched), async (branch, doc, refs) => {
+      let { type, id } = doc.data;
+
+      if (this._isInvalidated(branch, type, id, refs)) {
+        let schema = await this._schema.forBranch(branch);
+        let sourceId = schema.types.get(type).dataSource.id;
+        // this is correct because IF this document's data source is currently
+        // doing a replace-all operation, it was either already touched (so
+        // this code isn't running) or it's old (so it's correct to have a
+        // non-current nonce).
+        let nonce = 0;
+        let context = new DocumentContext({
+          schema,
+          branch,
+          type,
+          id,
+          sourceId,
+          generation: nonce,
+          upstreamDoc: doc,
+          read: this._read(branch)
+        });
+
+        if (type === 'user-realms') {
+          // if we have an invalidated user-realms and it hasn't
+          // already been touched, that's because the corresponding
+          // user was delete, so we should also delete the
+          // user-realms.
+          await this.deleteDocument({ branch, type, id });
+        } else {
+          let searchDoc = await context.searchDoc();
+          if (!searchDoc) {
+            // bad documents get ignored. The DocumentContext logs these for
+            // us, so all we need to do here is nothing.
+            return;
+          }
+          await this.saveDocument(context);
+        }
+      }
+    });
   }
 
   _isInvalidated(branch, type, id, refs) {
