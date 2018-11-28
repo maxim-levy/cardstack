@@ -149,12 +149,12 @@ class Searchers {
     if (result) {
       let schema = await schemaPromise;
       let includePaths = (get(query, 'include') || '').split(',');
-      let pristineResult = await this.createDocumentContext({
+      let pristineResult = await (this.createDocumentContext({
         branch,
         schema,
         includePaths,
         upstreamDoc: result,
-      }).pristineDoc();
+      }).pristineDoc());
 
       let authorizedResult = await schema.applyReadAuthorization(pristineResult, { session });
       if (authorizedResult.data.length !== pristineResult.data.length) {
