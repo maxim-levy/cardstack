@@ -267,7 +267,6 @@ class Batch {
       'select id, type, upstream_doc from documents where branch=$1',
       [branch],
       async ({ id, upstream_doc:upstreamDoc, type }) => {
-        log.info('this._schema: %j', this._schema);
         let schema = await this._schema.forControllingBranch();
         let realms = schema.authorizedReadRealms(type, upstreamDoc.data);
         const sql = 'update documents set realms=$1 where id=$2 and type=$3 and branch=$4';

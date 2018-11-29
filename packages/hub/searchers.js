@@ -191,12 +191,14 @@ class Searchers {
 
   _read(branch) {
     return async (type, id) => {
+      log.info('reading %s/%s/%s', branch, type, id);
       let resource;
       try {
         resource = (await this.getResourceAndMeta(Session.INTERNAL_PRIVILEGED, branch, type, id)).resource;
       } catch (err) {
         if (err.status !== 404) { throw err; }
       }
+      log.info('resource: %j', resource);
       return resource;
     };
   }

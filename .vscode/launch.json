@@ -115,13 +115,16 @@
             "name": "Launch Test Suite",
             "program": "${workspaceRoot}/node_modules/.bin/_mocha",
             "console": "integratedTerminal",
+            "env": {
+                "LOG_LEVELS":"*=info"
+            },
             "cwd": "${workspaceRoot}",
             "args": [
                 "packages/test-support/bin/run.js",
                 "--timeout",
                 "200000",
-                // "--grep",
-                // "duplicate module names"
+                "--grep",
+                "pgsearch"
             ]
         }
     ]

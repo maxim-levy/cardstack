@@ -112,7 +112,7 @@ class Writers {
         this.schema.invalidateCache();
       }
 
-      log.info('this.schema: %j', this.schema);
+      // log.info('this.schema: %j', this.schema);
 
       let batch = this.pgSearchClient.beginBatch(this.schema, this.searchers._read);
       await batch.saveDocument(context);
