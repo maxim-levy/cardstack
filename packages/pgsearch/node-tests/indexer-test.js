@@ -200,7 +200,7 @@ describe('pgsearch/indexer', function() {
     expect(found.included[0].relationships).deep.equals({ friends: { data: [{ type: 'people', id: circularPerson.id }]}});
   });
 
-  it('indexes a circular relationship', async function() {
+  it.only('indexes a circular relationship', async function() {
     let { data:person1 } = await writer.create('master', env.session, 'people', {
       data: {
         id: 'hassan',

@@ -72,7 +72,7 @@ module.exports = class DocumentContext {
   }
 
   async read(type, id) {
-    log.debug(`Reading record ${type}/${id}`);
+    log.info(`Reading record ${type}/${id}`);
 
     this._references.push(`${type}/${id}`);
 
