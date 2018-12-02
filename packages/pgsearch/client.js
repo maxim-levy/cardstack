@@ -13,8 +13,7 @@ const { upsert, queryToSQL, param } = require('./util');
 const config = postgresConfig({ database: `pgsearch_${process.env.PGSEARCH_NAMESPACE}` });
 
 module.exports = declareInjections({
-  // schema: 'hub:current-schema',
-  controllingBranch: 'hub:controlling-branch',
+  controllingBranch: 'hub:controlling-branch'
 },
 
 class PgClient extends EventEmitter {
@@ -139,7 +138,6 @@ class PgClient extends EventEmitter {
   async docsThatReference(references, fn){
     let refsMap = {};
     references.forEach(key => {
-      log.info('_touched: %s', key);
       let [branch, type, id] = key.split('/');
       if (!refsMap[branch]) {
         refsMap[branch] = [];
@@ -356,7 +354,7 @@ class Batch {
       return true;
     }
     for (let ref of refs) {
-      let refTouchedAt = this._touched[ref];
+      let refTouchedAt = this._touched[`${branch}/${ref}`];
       if (refTouchedAt != null && refTouchedAt > docTouchedAt) {
         // we found one of our references that was touched later than us, so we
         // need to be redone

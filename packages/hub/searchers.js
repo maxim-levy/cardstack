@@ -198,14 +198,11 @@ class Searchers {
       } catch (err) {
         if (err.status !== 404) { throw err; }
       }
-      log.info('resource: %j', resource);
       return resource;
     };
   }
 
   async _updateCache(maxAge, documentContext) {
-    log.info('this.currentSchema: %j', this.currentSchema);
-
     let batch = this.client.beginBatch(this.currentSchema, this);
     try {
       await batch.saveDocument(documentContext, { maxAge });
