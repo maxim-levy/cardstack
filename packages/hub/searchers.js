@@ -206,7 +206,7 @@ class Searchers {
   async _updateCache(maxAge, documentContext) {
     log.info('this.currentSchema: %j', this.currentSchema);
 
-    let batch = this.client.beginBatch(this.currentSchema, this._read);
+    let batch = this.client.beginBatch(this.currentSchema, this);
     try {
       await batch.saveDocument(documentContext, { maxAge });
     } finally {

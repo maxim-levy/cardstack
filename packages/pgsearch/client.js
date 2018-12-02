@@ -3,7 +3,6 @@ const { Pool, Client } = require('pg');
 const Cursor = require('pg-cursor');
 const migrate = require('node-pg-migrate').default;
 const log = require('@cardstack/logger')('cardstack/pgsearch');
-const DocumentContext = require('@cardstack/hub/indexing/document-context');
 const Session = require('@cardstack/plugin-utils/session');
 const { declareInjections } = require('@cardstack/di');
 const EventEmitter = require('events');
@@ -118,8 +117,8 @@ class PgClient extends EventEmitter {
     }
   }
 
-  beginBatch(schema, read) {
-    return new Batch(this, schema, read);
+  beginBatch(schema, searchers) {
+    return new Batch(this, schema, searchers);
   }
 
   async deleteOlderGenerations(branch, sourceId, nonce) {
@@ -138,15 +137,21 @@ class PgClient extends EventEmitter {
   }
 
   async docsThatReference(references, fn){
-    let branches = references.map(key => {
+    let refsMap = {};
+    references.forEach(key => {
       log.info('_touched: %s', key);
-      return key.split('/')[0];
-    }).filter((v, i, a) => a.indexOf(v) === i);
+      let [branch, type, id] = key.split('/');
+      if (!refsMap[branch]) {
+        refsMap[branch] = [];
+      }
+      refsMap[branch].push(`${type}/${id}`);
+    });
 
-    for (let branch of branches) {
+    for (let branch of Object.keys(refsMap)) {
       const queryBatchSize = 100;
-      for (let i = 0; i < references.length; i += queryBatchSize){
-        let queryRefs = references.slice(i, i + queryBatchSize);
+      let refs = refsMap[branch];
+      for (let i = 0; i < refs.length; i += queryBatchSize){
+        let queryRefs = refs.slice(i, i + queryBatchSize);
         await this._iterateThroughRows(
           'select upstream_doc, refs from documents where branch=$1 and refs && $2',
           [branch, queryRefs],
@@ -176,9 +181,9 @@ class PgClient extends EventEmitter {
 });
 
 class Batch {
-  constructor(client, schema, read) {
+  constructor(client, schema, searchers) {
     this.client = client;
-    this._read = read;
+    this._searchers = searchers;
     this._schema = schema;
     this._touched = Object.create(null);
     this._touchCounter = 0;
@@ -281,15 +286,14 @@ class Batch {
       `select id, type, source, upstream_doc, generation from documents where branch=$1 and type != 'user-realms'`,
       [branch],
       async ({ id, type, source:sourceId, upstream_doc:upstreamDoc, generation }) => {
-          let context = new DocumentContext({
+          let context = this._searchers.createDocumentContext({
             branch,
             type,
             id,
             sourceId,
             generation,
             upstreamDoc,
-            schema,
-            read: this._read(branch)
+            schema
           });
           await this._maybeUpdateRealms(context);
       });
@@ -315,15 +319,14 @@ class Batch {
         // this code isn't running) or it's old (so it's correct to have a
         // non-current nonce).
         let nonce = 0;
-        let context = new DocumentContext({
+        let context = this._searchers.createDocumentContext({
           schema,
           branch,
           type,
           id,
           sourceId,
           generation: nonce,
-          upstreamDoc: doc,
-          read: this._read(branch)
+          upstreamDoc: doc
         });
 
         if (type === 'user-realms') {
@@ -370,14 +373,13 @@ class Batch {
     let realms = await schema.userRealms(doc.data);
     if (realms) {
       let userRealmsId = Session.encodeBaseRealm(type, id);
-      let userRealmContext = new DocumentContext({
+      let userRealmContext = this._searchers.createDocumentContext({
         type: 'user-realms',
         id: userRealmsId,
         branch,
         sourceId,
         generation,
         schema,
-        read: this._read(branch),
         upstreamDoc: {
           data: {
             type: 'user-realms',

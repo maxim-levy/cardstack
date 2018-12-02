@@ -72,7 +72,7 @@ class Writers {
       }
       log.info('this.schema: %j', this.schema);
 
-      let batch = this.pgSearchClient.beginBatch(this.schema, this.searchers._read);
+      let batch = this.pgSearchClient.beginBatch(this.schema, this.searchers);
       await batch.saveDocument(context);
       await batch.done();
 
@@ -114,7 +114,7 @@ class Writers {
 
       // log.info('this.schema: %j', this.schema);
 
-      let batch = this.pgSearchClient.beginBatch(this.schema, this.searchers._read);
+      let batch = this.pgSearchClient.beginBatch(this.schema, this.searchers);
       await batch.saveDocument(context);
       await batch.done();
 
@@ -143,7 +143,7 @@ class Writers {
       }
       log.info('this.schema: %j', this.schema);
 
-      let batch = this.pgSearchClient.beginBatch(this.schema, this.searchers._read);
+      let batch = this.pgSearchClient.beginBatch(this.schema, this.searchers);
       await batch.deleteDocument(context);
       await batch.done();
     } finally {

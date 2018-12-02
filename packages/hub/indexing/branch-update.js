@@ -17,7 +17,7 @@ class BranchUpdate {
     this.currentSchema = owner.lookup('hub:current-schema');
     this.schemaModels = [];
     this._schema = null;
-    this._batch = client.beginBatch(this.currentSchema, this.searchers._read);
+    this._batch = client.beginBatch(this.currentSchema, this.searchers);
   }
 
   async addDataSource(dataSource) {
